@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+
+# Data
+data/raw/
+data/processed/
+*.csv
+*.zip
+*.npy
+
+# Logs & experiments
+logs/
+experiments/
+
+# Model artifacts
+*.pt
+*.pth
+*.onnx
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
