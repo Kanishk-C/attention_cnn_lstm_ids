@@ -1,31 +1,23 @@
-# Python
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
 .env
 .venv
 
-# Data
 data/raw/
 data/processed/
-*.csv
-*.zip
 *.npy
+*.pkl
+*.csv
 
-# Logs & experiments
-logs/
-experiments/
-
-# Model artifacts
+experiments/checkpoints/
 *.pt
 *.pth
-*.onnx
 
-# Jupyter
+logs/
+
 .ipynb_checkpoints/
+notebooks/*.ipynb
 
-# OS
 .DS_Store
 Thumbs.db
-
