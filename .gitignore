@@ -19,5 +19,14 @@ logs/
 .ipynb_checkpoints/
 notebooks/*.ipynb
 
+# Archives
+*.zip
+*.tar.gz
+*.rar
+
+# IDEs
+.vscode/
+.idea/
+
 .DS_Store
 Thumbs.db
