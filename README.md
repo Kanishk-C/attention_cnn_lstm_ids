@@ -179,21 +179,21 @@ X_train, y_train  →  run_training.py
 | **Real Device** | Reads flows captured by `capture_agent.py` from your NIC |
 | **Mixed** | Both simultaneously |
 
-### Inference Pipeline (per sample)
+### Inference Pipeline (per batch of up to 100 flows)
 
 ```
-feature vector (raw)
-  → model_loader.IDS_Model.classify()
-      ├── StandardScaler.transform()   ← scale to z-scores
-      ├── PyTorch model.forward()      ← compute logit
-      ├── sigmoid(logit) → prob        ← attack probability
+feature vector batch (raw)
+  → model_loader.IDS_Model.classify_batch()
+      ├── StandardScaler.transform()   ← scale to z-scores (vectorized)
+      ├── PyTorch model.forward()      ← compute logits (vectorized)
+      ├── sigmoid(logit) → prob        ← attack probabilities
       └── prob >= threshold → ATTACK / BENIGN
 ```
+*Note: We utilize Batch Processing (passing 100 buffered flows from the `/dev/shm` queue at a time) to dramatically eliminate CPU bottlenecks and ensure real-time stream capability.*
 
-### Detection Threshold
+### Detection Threshold & Auto-Tuning
 
-The threshold is **auto-tuned at model load** using 2 000 stratified test-set samples to
-maximise F1-score. You can adjust it manually in the sidebar. Use **🎯 Auto-tune** to recompute.
+The detection threshold can be dynamically optimized using the **⚙️ Auto-Tune Threshold** button in the sidebar. This scans the included `sample_traffic.csv` validation set using the active model to pinpoint the exact threshold that maximizes the **F1-score**, removing the guesswork from manual threshold tuning. You can also manually adjust the threshold via the slider.
 
 ---
 

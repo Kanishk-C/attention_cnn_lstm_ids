@@ -111,11 +111,26 @@ mode = st.sidebar.radio("Traffic Mode", ["Live Capture (NFStream)", "Simulation 
 st.sidebar.subheader("Model Configuration")
 selected_model = st.sidebar.selectbox("Select Model Architecture", 
                                     ["Attention-CNN-LSTM", "CNN", "LSTM", "CNN-LSTM"])
-threshold = st.sidebar.slider("Detection Threshold", 0.0, 1.0, 0.5, 0.01)
+
+if "model_threshold" not in st.session_state:
+    st.session_state["model_threshold"] = 0.50
+
+threshold = st.sidebar.slider("Detection Threshold", 0.0, 1.0, st.session_state["model_threshold"], 0.01)
 
 # Initialize chosen model
 model_loader = load_ids_model(model_name=selected_model, threshold=threshold)
 st.sidebar.success(f"{selected_model} Loaded.")
+
+if st.sidebar.button("⚙️ Auto-Tune Threshold", help="Find best threshold using sample test data to maximize F1 Score"):
+    with st.spinner("Finding optimal threshold..."):
+        best_t, best_f1 = model_loader.autotune_threshold()
+        if best_f1 > 0:
+            st.session_state["model_threshold"] = round(best_t, 2)
+            st.sidebar.success(f"Optimized Threshold: {best_t:.2f} (F1: {best_f1:.2f})")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.sidebar.error("Could not run autotune. Sample data might be missing.")
 
 simulator_speed = 1.0
 uploaded_file = None
@@ -242,58 +257,66 @@ with tab1:
 
 
                 
-                # Process flows
-                for flow in new_flows:
-                    # Handle both Simulation (list) and Live (dict) formats
-                    if isinstance(flow, dict):
-                        features = flow["features"]
-                        src_ip = flow["src_ip"]
-                        dst_ip = flow["dst_ip"]
-                        port = flow["port"]
-                    else:
-                        features = flow
-                        src_ip = "Simulation"
-                        dst_ip = "Dataset"
-                        port = flow[0] if len(flow) > 0 else "N/A" # First feature is Dest Port in CICIDS
-
-                    # Pad to 78 features if nfstream truncated it
-                    if len(features) < 78:
-                        features += [0.0] * (78 - len(features))
-                        
-                    pred_class, conf, prob = model_loader.classify(features[:78])
+                # Process flows in batches
+                BATCH_SIZE = 100
+                for i in range(0, len(new_flows), BATCH_SIZE):
+                    batch_flows = new_flows[i:i+BATCH_SIZE]
                     
-                    metrics["packets_processed"] += 1
-                    if pred_class == "ATTACK":
-                        metrics["malicious_count"] += 1
-                        # Persistent Attack Logging (SSD)
-                        try:
-                            file_exists = os.path.exists(HISTORY_FILE)
-                            with open(HISTORY_FILE, 'a', newline='') as f:
-                                writer = csv.writer(f)
-                                if not file_exists or os.path.getsize(HISTORY_FILE) == 0:
-                                    writer.writerow(["Time", "Src IP", "Dest IP", "Port", "Confidence", "P(Attack)"])
-                                writer.writerow([
-                                    pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    src_ip, dst_ip, port, round(conf * 100, 2), round(prob, 4)
-                                ])
-                        except Exception:
-                            pass
-                    else:
-                        metrics["benign_count"] += 1
-
+                    batch_features = []
+                    for flow in batch_flows:
+                        if isinstance(flow, dict):
+                            features = flow["features"]
+                        else:
+                            features = flow
                         
-                    # Maintain log queue size limited to 20
-                    metrics["log_queue"].insert(0, {
-                        "Time": pd.Timestamp.now().strftime("%H:%M:%S"),
-                        "Src IP": src_ip,
-                        "Dest IP": dst_ip,
-                        "Port": port,
-                        "Prediction": f"🚨 {pred_class}" if pred_class == "ATTACK" else f"✅ {pred_class}",
-                        "Confidence (%)": round(conf * 100, 2),
-                        "P(Attack)": round(prob, 4)
-                    })
-                    if len(metrics["log_queue"]) > 20:
-                        metrics["log_queue"].pop()
+                        if len(features) < 78:
+                            features += [0.0] * (78 - len(features))
+                        batch_features.append(features[:78])
+                    
+                    batch_results = model_loader.classify_batch(batch_features)
+                    
+                    for flow, (pred_class, conf, prob) in zip(batch_flows, batch_results):
+                        # Handle both Simulation (list) and Live (dict) formats
+                        if isinstance(flow, dict):
+                            src_ip = flow["src_ip"]
+                            dst_ip = flow["dst_ip"]
+                            port = flow["port"]
+                        else:
+                            src_ip = "Simulation"
+                            dst_ip = "Dataset"
+                            port = flow[0] if len(flow) > 0 else "N/A" # First feature is Dest Port in CICIDS
+                            
+                        metrics["packets_processed"] += 1
+                        if pred_class == "ATTACK":
+                            metrics["malicious_count"] += 1
+                            # Persistent Attack Logging (SSD)
+                            try:
+                                file_exists = os.path.exists(HISTORY_FILE)
+                                with open(HISTORY_FILE, 'a', newline='') as f:
+                                    writer = csv.writer(f)
+                                    if not file_exists or os.path.getsize(HISTORY_FILE) == 0:
+                                        writer.writerow(["Time", "Src IP", "Dest IP", "Port", "Confidence", "P(Attack)"])
+                                    writer.writerow([
+                                        pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        src_ip, dst_ip, port, round(conf * 100, 2), round(prob, 4)
+                                    ])
+                            except Exception:
+                                pass
+                        else:
+                            metrics["benign_count"] += 1
+    
+                        # Maintain log queue size limited to 20
+                        metrics["log_queue"].insert(0, {
+                            "Time": pd.Timestamp.now().strftime("%H:%M:%S"),
+                            "Src IP": src_ip,
+                            "Dest IP": dst_ip,
+                            "Port": port,
+                            "Prediction": f"🚨 {pred_class}" if pred_class == "ATTACK" else f"✅ {pred_class}",
+                            "Confidence (%)": round(conf * 100, 2),
+                            "P(Attack)": round(prob, 4)
+                        })
+                        if len(metrics["log_queue"]) > 20:
+                            metrics["log_queue"].pop()
 
                 
                 # Update UI Dashboard Metrics
