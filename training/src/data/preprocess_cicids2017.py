@@ -132,7 +132,7 @@ def main():
     print(f"  Train : {X_train.shape[0]:,} rows x {X_train.shape[1]} features")
     print(f"  Test  : {X_test.shape[0]:,} rows")
     print()
-    print("Next:  python run_all.py --epochs 3 --model CNN")
+    print("Next:  python training/run_training.py --epochs 3 --model CNN")
 
 
 if __name__ == "__main__":

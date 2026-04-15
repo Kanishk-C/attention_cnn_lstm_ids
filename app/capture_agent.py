@@ -1,7 +1,5 @@
 import os
 import sys
-import json
-import time
 import argparse
 import fcntl
 import csv
@@ -34,14 +32,7 @@ else:
 
 
 def map_nfstream_to_cicids(flow):
-    """
-    Approximates the 78 CIC-IDS2017 features from nfstream output.
-    Note: nfstream and CICFlowMeter have slight differences in statistical aggregations, 
-    so this assigns closely related features.
-    """
-    # This is a simplified mapper. In a fully robust deployment, we would map all 78 perfectly.
-    # To prevent dashboard crash due to mismatch, we pad the array up to 78 numeric fields.
-    # We will prioritize capturing length, byte stats, duration, etc.
+    """Approximates the 78 CIC-IDS2017 features from nfstream output."""
     
     features = [0.0] * 78
     
@@ -108,8 +99,7 @@ def safe_append_to_queue(src_ip, dst_ip, src_port, dst_port, features_list):
         try:
             writer = csv.writer(f)
             
-            # High-performance rolling buffer: Only parse lines if file exceeds ~20MB
-            # This completely eliminates the O(N^2) bottleneck that was slowing down capture speeds.
+            # Rolling buffer: Parse lines if file exceeds ~20MB
             if file_exists and os.path.getsize(QUEUE_FILE) > 20 * 1024 * 1024:
                 f.seek(0)
                 lines = f.readlines()
@@ -130,8 +120,7 @@ def safe_append_to_queue(src_ip, dst_ip, src_port, dst_port, features_list):
             writer.writerow(row)
 
             
-            # Since we are appending, we don't truncate. 
-            # The dashboard will handle clearing the file when it reads.
+
             
         finally:
             if sys.platform != 'win32':
@@ -146,8 +135,7 @@ def start_capture(interface, dry_run=False):
         print("[*] DRY RUN MODE: Traffice will be printed, not forwarded.")
         
     try:
-        # Enable statistical analysis for deep feature extraction
-        streamer = NFStreamer(source=interface, 
+        streamer = NFStreamer(source=interface,  
                               active_timeout=5, 
                               idle_timeout=5, 
                               statistical_analysis=True)

@@ -153,4 +153,4 @@ if __name__ == "__main__":
     print(f"  Results    → {LOG_DIR}/results.csv")
     print(f"  Plots      → {LOG_DIR}/")
     print(f"  Checkpoints→ {CKPT_DIR}/")
-    print("\n[DONE]  Run:  streamlit run app.py")
+    print("\n[DONE]  Run:  streamlit run app/dashboard.py")

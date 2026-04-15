@@ -1,11 +1,10 @@
 import os
 import sys
-import json
 import time
+import csv
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-import plotly.graph_objects as go
 from PIL import Image
 
 # Setup base paths
@@ -60,7 +59,7 @@ st.markdown("""
 
 """, unsafe_allow_html=True)
 
-# ─── STATE INITIALIZATION ──────────────────────────────────────────────────
+# State Initialization
 if "dashboard_metrics" not in st.session_state:
     st.session_state["dashboard_metrics"] = {
         "packets_processed": 0,
@@ -78,20 +77,18 @@ if "file_position" not in st.session_state:
 def load_ids_model(model_name="Attention-CNN-LSTM", threshold=0.5):
     return ModelLoader(model_name=model_name, threshold=threshold)
 
-# ─── SIDEBAR CONFIGURATION ──────────────────────────────────────────────────
+# Sidebar Confguration
 st.sidebar.title("🛡️ IDS Settings")
 st.sidebar.markdown("Configure real-time monitoring and model performance.")
 
-# ─── RESET DEMO LOGIC ──────────────────────────────────────────────────────
+# Reset Logic
 if st.sidebar.button("🗑️ Reset Demo / Clear Captures", type="primary", use_container_width=True):
-    # 1. Clear session metrics
     st.session_state["dashboard_metrics"] = {
         "packets_processed": 0,
         "benign_count": 0,
         "malicious_count": 0,
         "log_queue": []
     }
-    # 2. Delete files in captures folder
     captures_dir = os.path.join(ROOT_DIR, "app", "data", "captures")
     if os.path.exists(captures_dir):
         for filename in os.listdir(captures_dir):
@@ -158,7 +155,7 @@ if mode == "Simulation (CSV)":
 else:
     st.sidebar.info("Running in Live Mode. Ensure `sudo python app/capture_agent.py` is running in the background.")
 
-# ─── UI TABS ──────────────────────────────────────────────────────────────
+# Tabs Setup
 tab1, tab2, tab3 = st.tabs(["🚀 Real-Time Dashboard", "📊 Model Comparison", "📈 Visualizations"])
 
 with tab1:
@@ -196,12 +193,10 @@ with tab1:
             
         metrics = st.session_state["dashboard_metrics"]
         
-        # Polling loop
         try:
             while True:
                 new_flows = []
-                
-                # Fetch data based on mode
+
                 if mode == "Simulation (CSV)":
                     if sim_generator:
                         try:
@@ -214,45 +209,32 @@ with tab1:
                     else:
                         st.warning("Please upload a CSV or load the sample traffic in the sidebar first.")
                         break
-                else: # Live Mode
+                else:  # Live Mode
                     if os.path.exists(QUEUE_URL) and os.path.getsize(QUEUE_URL) > 0:
                         try:
                             file_size = os.path.getsize(QUEUE_URL)
                             if st.session_state["file_position"] > file_size:
-                                # File was truncated/rolled over by the agent
-                                st.session_state["file_position"] = 0
-                                
-                            with open(QUEUE_URL, 'r') as f:
-                                # Start reading from the last known position
-                                f.seek(st.session_state["file_position"])
+                                st.session_state["file_position"] = 0  # file rolled over
 
-                                
-                                # Read exactly the lines that are complete
+                            with open(QUEUE_URL, 'r') as f:
+                                f.seek(st.session_state["file_position"])
                                 lines = f.readlines()
-                                
+
                                 if lines:
-                                    import csv
                                     from io import StringIO
-                                    
-                                    # Provide lines to csv.reader
                                     reader = csv.reader(StringIO("".join(lines)))
-                                    
                                     for row in reader:
-                                        # Skip header or incomplete rows
                                         if len(row) < 82 or row[0] == "src_ip":
                                             continue
-                                            
-                                        # row = [src_ip, dst_ip, src_port, dst_port] + 78 features
                                         new_flows.append({
                                             "src_ip": row[0],
                                             "dst_ip": row[1],
                                             "port": int(row[3]) if row[3].isdigit() else 0,
-                                            "features": [float(val) for val in row[4:82]]
+                                            "features": [float(v) for v in row[4:82]]
                                         })
-                                        
-                                # Update position for the next poll
+
                                 st.session_state["file_position"] = f.tell()
-                        except Exception as e:
+                        except Exception:
                             pass
 
 
@@ -284,7 +266,7 @@ with tab1:
                         else:
                             src_ip = "Simulation"
                             dst_ip = "Dataset"
-                            port = flow[0] if len(flow) > 0 else "N/A" # First feature is Dest Port in CICIDS
+                            port = flow[0] if len(flow) > 0 else "N/A"
                             
                         metrics["packets_processed"] += 1
                         if pred_class == "ATTACK":
@@ -305,7 +287,6 @@ with tab1:
                         else:
                             metrics["benign_count"] += 1
     
-                        # Maintain log queue size limited to 20
                         metrics["log_queue"].insert(0, {
                             "Time": pd.Timestamp.now().strftime("%H:%M:%S"),
                             "Src IP": src_ip,
@@ -344,11 +325,10 @@ with tab1:
                 chart_placeholder.plotly_chart(fig, key=f"donut_{int(time.time()*1000)}")
 
                 
-                # Sleep depending on mode
                 if mode == "Live Capture (NFStream)":
-                    time.sleep(0.3) # Faster polling rate for live traffic
+                    time.sleep(0.3)
                 else:
-                    time.sleep(0.01) # fast simulation renders
+                    time.sleep(0.01)
 
                     
         except KeyboardInterrupt:
@@ -379,7 +359,6 @@ with tab3:
     
     with col1:
         st.subheader("Confusion Matrix")
-        # Load from logs
         cm_path = os.path.join(ROOT_DIR, "logs", f"cm_{selected_model.replace(' ', '_')}.png")
         if os.path.exists(cm_path):
             img = Image.open(cm_path)
