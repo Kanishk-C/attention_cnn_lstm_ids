@@ -100,6 +100,16 @@ Dashboard opens at **http://localhost:8501**.
 
 ---
 
+## 📖 Advanced Usage & Guides
+
+For detailed setup and testing instructions, please refer to our documentation:
+
+*   **[OS-Specific Installation Guide](file:///home/kxjxmdk/Dev/projects/attention_cnn_lstm_ids/docs/os_installation_guide.md)**: Setup instructions for Linux, Windows (Npcap), and macOS.
+*   **[Network Attack Simulation Guide](file:///home/kxjxmdk/Dev/projects/attention_cnn_lstm_ids/docs/attack_simulation_guide.md)**: How to safely test the IDS using `nmap`, `hping3`, and manual CSV spoofing.
+
+---
+
+
 ## Models and Architecture
 
 All four models receive **78 numerical flow features** extracted from CIC-IDS2017,

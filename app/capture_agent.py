@@ -4,6 +4,8 @@ import json
 import time
 import argparse
 import fcntl
+import csv
+
 
 # Cross-OS Compatibility check for nfstream
 try:
@@ -21,7 +23,15 @@ def print_os_help():
         print("\nNote: On Windows, live packet sniffing requires Npcap (https://npcap.com/) and Administrator privileges.")
         print("Please ensure Npcap is installed and run your terminal/Command Prompt as Administrator.\n")
 
-QUEUE_FILE = os.path.join(os.path.dirname(__file__), ".traffic_queue.json")
+# Priority 1: Shared Memory (RAM) for SSD Longevity
+if os.path.exists("/dev/shm") and os.access("/dev/shm", os.W_OK):
+    QUEUE_FILE = "/dev/shm/ids_traffic_queue.csv"
+else:
+    QUEUE_FILE = os.path.join(os.path.dirname(__file__), "data", "captures", ".traffic_queue.csv")
+    os.makedirs(os.path.dirname(QUEUE_FILE), exist_ok=True)
+
+
+
 
 def map_nfstream_to_cicids(flow):
     """
@@ -33,66 +43,100 @@ def map_nfstream_to_cicids(flow):
     # To prevent dashboard crash due to mismatch, we pad the array up to 78 numeric fields.
     # We will prioritize capturing length, byte stats, duration, etc.
     
-    # We will use dummy mapping for the missing exact CICFlowMeter metrics
-    # while transferring key nfstream fields.
-    features = [0.0] * 78 
+    features = [0.0] * 78
     
-    # Example mapping (indexes as per `feature_names.txt`):
-    features[0] = flow.dst_port                 # Destination Port
-    features[1] = flow.bidirectional_duration_ms # Flow Duration
-    features[2] = flow.src2dst_packets          # Total Fwd Packets
-    features[3] = flow.dst2src_packets          # Total Backward Packets
-    features[4] = flow.src2dst_bytes            # Total Length of Fwd Packets
-    features[5] = flow.dst2src_bytes            # Total Length of Bwd Packets
-    # Fwd Packet max/min/mean/std (6-9)
-    features[8] = flow.src2dst_bytes / max(flow.src2dst_packets, 1) # Fwd Packet Length Mean
-    # Bwd Packet max/min/mean/std (10-13)
-    features[12] = flow.dst2src_bytes / max(flow.dst2src_packets, 1) # Bwd Packet Length Mean
+    # 1. Basic Flow Info
+    features[0] = flow.dst_port                  # Destination Port
+
+    features[1] = flow.bidirectional_duration_ms  # Flow Duration
+    features[2] = flow.src2dst_packets           # Total Fwd Packets
+    features[3] = flow.dst2src_packets           # Total Backward Packets
+    features[4] = flow.src2dst_bytes             # Total Length of Fwd Packets
+    features[5] = flow.dst2src_bytes             # Total Length of Bwd Packets
     
-    # Calculate bytes/s and packets/s
+    # 2. Fwd/Bwd Packet Length Stats (6-13)
+    features[6] = getattr(flow, 'src2dst_max_ps', 0)
+    features[7] = getattr(flow, 'src2dst_min_ps', 0)
+    features[8] = getattr(flow, 'src2dst_mean_ps', 0)
+    features[9] = getattr(flow, 'src2dst_stddev_ps', 0)
+    
+    features[10] = getattr(flow, 'dst2src_max_ps', 0)
+    features[11] = getattr(flow, 'dst2src_min_ps', 0)
+    features[12] = getattr(flow, 'dst2src_mean_ps', 0)
+    features[13] = getattr(flow, 'dst2src_stddev_ps', 0)
+
+    # 3. Flow Bytes/Packets per sec (14-15)
     duration_s = max(flow.bidirectional_duration_ms / 1000.0, 0.0001)
-    features[14] = flow.bidirectional_bytes / duration_s   # Flow Bytes/s
-    features[15] = flow.bidirectional_packets / duration_s # Flow Packets/s
-    
-    # TCP flags (44-51 approx)
-    features[44] = getattr(flow, 'bidirectional_fin_packets', 0)
-    features[45] = getattr(flow, 'bidirectional_syn_packets', 0)
-    features[46] = getattr(flow, 'bidirectional_rst_packets', 0)
-    features[47] = getattr(flow, 'bidirectional_psh_packets', 0)
-    features[48] = getattr(flow, 'bidirectional_ack_packets', 0)
+    features[14] = flow.bidirectional_bytes / duration_s
+    features[15] = flow.bidirectional_packets / duration_s
+
+    # 4. Flow IAT Stats (16-19)
+    features[16] = getattr(flow, 'bidirectional_mean_piat_ms', 0)
+    features[17] = getattr(flow, 'bidirectional_stddev_piat_ms', 0)
+    features[18] = getattr(flow, 'bidirectional_max_piat_ms', 0)
+    features[19] = getattr(flow, 'bidirectional_min_piat_ms', 0)
+
+    # 5. TCP Flags (approximate from packet counts)
+    features[44] = 1 if getattr(flow, 'bidirectional_fin_packets', 0) > 0 else 0
+    features[45] = 1 if getattr(flow, 'bidirectional_syn_packets', 0) > 0 else 0
+    features[46] = 1 if getattr(flow, 'bidirectional_rst_packets', 0) > 0 else 0
+    features[47] = 1 if getattr(flow, 'bidirectional_psh_packets', 0) > 0 else 0
+    features[48] = 1 if getattr(flow, 'bidirectional_ack_packets', 0) > 0 else 0
+
+    # 6. Overall Packet Stats (38-42)
+    features[38] = getattr(flow, 'bidirectional_min_ps', 0)
+    features[39] = getattr(flow, 'bidirectional_max_ps', 0)
+    features[40] = getattr(flow, 'bidirectional_mean_ps', 0)
+    features[41] = getattr(flow, 'bidirectional_stddev_ps', 0)
+
     
     return features
 
-def safe_append_to_queue(features_list):
-    """Appends to .traffic_queue.json safely using file locking."""
-    # Ensure file exists
-    if not os.path.exists(QUEUE_FILE):
-        with open(QUEUE_FILE, 'w') as f:
-            json.dump([], f)
-            
-    with open(QUEUE_FILE, 'r+') as f:
+def safe_append_to_queue(src_ip, dst_ip, src_port, dst_port, features_list):
+    """Appends flow data to .traffic_queue.csv safely using file locking."""
+    # Ensure file exists and has a header
+    file_exists = os.path.exists(QUEUE_FILE)
+    
+    header = ["src_ip", "dst_ip", "src_port", "dst_port"] + [f"feat_{i}" for i in range(78)]
+    
+    with open(QUEUE_FILE, 'a+', newline='') as f:
+
         # Acquire an exclusive lock
         if sys.platform != 'win32':
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             
         try:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                data = []
+            writer = csv.writer(f)
+            
+            # High-performance rolling buffer: Only parse lines if file exceeds ~20MB
+            # This completely eliminates the O(N^2) bottleneck that was slowing down capture speeds.
+            if file_exists and os.path.getsize(QUEUE_FILE) > 20 * 1024 * 1024:
+                f.seek(0)
+                lines = f.readlines()
+                if len(lines) > 10000:
+                    # Keep header + last 9000 lines to avoid immediate re-truncation
+                    new_content = [lines[0]] + lines[-9000:]
+                    f.seek(0)
+                    f.truncate()
+                    f.writelines(new_content)
+                    f.seek(0, os.SEEK_END)
+
+            
+            if not file_exists or os.path.getsize(QUEUE_FILE) == 0:
+                writer.writerow(header)
                 
-            # Keep queue size manageable (last 1000 items)
-            data.append(features_list)
-            if len(data) > 1000:
-                data = data[-1000:]
-                
-            f.seek(0)
-            f.truncate()
-            json.dump(data, f)
+            # Row format: metadata + 78 features
+            row = [src_ip, dst_ip, src_port, dst_port] + features_list
+            writer.writerow(row)
+
+            
+            # Since we are appending, we don't truncate. 
+            # The dashboard will handle clearing the file when it reads.
             
         finally:
             if sys.platform != 'win32':
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
 
 def start_capture(interface, dry_run=False):
     print(f"[*] Starting NFStreamer on interface: {interface}")
@@ -102,7 +146,14 @@ def start_capture(interface, dry_run=False):
         print("[*] DRY RUN MODE: Traffice will be printed, not forwarded.")
         
     try:
-        streamer = NFStreamer(source=interface, active_timeout=10, idle_timeout=30)
+        # Enable statistical analysis for deep feature extraction
+        streamer = NFStreamer(source=interface, 
+                              active_timeout=5, 
+                              idle_timeout=5, 
+                              statistical_analysis=True)
+
+
+
         for flow in streamer:
             # Map raw flow output to CICIDS2017 features
             mapped_features = map_nfstream_to_cicids(flow)
@@ -110,7 +161,12 @@ def start_capture(interface, dry_run=False):
             if dry_run:
                 print(f"[Flow] {flow.src_ip}:{flow.src_port} -> {flow.dst_ip}:{flow.dst_port} | Packets: {flow.bidirectional_packets}")
             else:
-                safe_append_to_queue(mapped_features)
+                safe_append_to_queue(
+                    flow.src_ip, flow.dst_ip, 
+                    getattr(flow, 'src_port', 0), getattr(flow, 'dst_port', 0),
+                    mapped_features
+                )
+
                 
     except PermissionError:
         print("\n[!] PERMISSION DENIED.")
@@ -123,10 +179,25 @@ def start_capture(interface, dry_run=False):
     except KeyboardInterrupt:
         print("\n[*] Capture stopped by user.")
 
+def list_interfaces():
+    """Lists available network interfaces using psutil."""
+    import psutil
+    print("\n[*] Available Network Interfaces:")
+    addrs = psutil.net_if_addrs()
+    for name, _ in addrs.items():
+        print(f"  - {name}")
+    print("")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Live traffic capture agent for Streamlit IDS")
     parser.add_argument("--interface", type=str, default="eth0", help="Network interface to monitor")
     parser.add_argument("--dry-run", action="store_true", help="Print features to console instead of sending to dashboard")
+    parser.add_argument("--list-interfaces", action="store_true", help="List available network interfaces and exit")
     args = parser.parse_args()
     
+    if args.list_interfaces:
+        list_interfaces()
+        sys.exit(0)
+        
     start_capture(args.interface, args.dry_run)
+
