@@ -71,6 +71,8 @@ if "simulator" not in st.session_state:
     st.session_state["simulator"] = None
 if "file_position" not in st.session_state:
     st.session_state["file_position"] = 0
+if "monitoring_active" not in st.session_state:
+    st.session_state["monitoring_active"] = False
 
 
 @st.cache_resource
@@ -171,10 +173,43 @@ with tab1:
     st.subheader("Live Traffic Stream")
     table_placeholder = st.empty()
     chart_placeholder = st.empty()
+
+    # --- UI Persistence: Render Last/Current State ---
+    metrics = st.session_state["dashboard_metrics"]
+    m_total.metric("Total Flows Processed", metrics["packets_processed"])
+    m_benign.metric("Normal Traffic (BENIGN)", metrics["benign_count"])
+    m_attack.metric("Threat Count (ATTACK)", metrics["malicious_count"])
     
-    start_btn = st.button("▶ Start Monitoring")
+    atk_rate = (metrics["malicious_count"] / max(metrics["packets_processed"], 1)) * 100
+    m_rate.metric("Threat Ratio", f"{atk_rate:.1f}%")
     
-    if start_btn:
+    if metrics["log_queue"]:
+        df_log = pd.DataFrame(metrics["log_queue"])
+        table_placeholder.dataframe(df_log, width='stretch')
+    
+    if metrics["packets_processed"] > 0:
+        fig_init = px.pie(
+            names=["BENIGN", "ATTACK"],
+            values=[metrics["benign_count"], metrics["malicious_count"]],
+            hole=0.4,
+            color=["BENIGN", "ATTACK"],
+            color_discrete_map={"BENIGN": "#3FB950", "ATTACK": "#F85149"}
+        )
+        fig_init.update_layout(margin=dict(t=0, b=0, l=0, r=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        chart_placeholder.plotly_chart(fig_init, key=f"donut_pause_{int(time.time())}")
+    
+    col_btn1, col_btn2 = st.columns([1, 4])
+    if not st.session_state["monitoring_active"]:
+        if col_btn1.button("▶ Resume Monitoring" if metrics["packets_processed"] > 0 else "▶ Start Monitoring", 
+                           type="primary", use_container_width=True):
+            st.session_state["monitoring_active"] = True
+            st.rerun()
+    else:
+        if col_btn1.button("⏸ Pause Monitoring", type="secondary", use_container_width=True):
+            st.session_state["monitoring_active"] = False
+            st.rerun()
+
+    if st.session_state["monitoring_active"]:
         # Path Resolution (must match capture_agent.py priority)
         if os.path.exists("/dev/shm") and os.access("/dev/shm", os.R_OK):
             QUEUE_URL = "/dev/shm/ids_traffic_queue.csv"

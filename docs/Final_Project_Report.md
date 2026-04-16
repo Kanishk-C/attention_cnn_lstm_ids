@@ -1,4 +1,4 @@
-# Final Project Report: Attention-CNN-LSTM Intrusion Detection System
+# Project Report: Attention-CNN-LSTM Intrusion Detection System
 
 ## 1. Executive Summary
 This project implements a sophisticated Deep-Learning-Based Network Intrusion Detection System (NIDS). The architecture was theoretically inspired by the paper *"Deep learning for network security: an Attention-CNN-LSTM model for accurate intrusion detection"* (Alashjaee, 2025). The goal of this engineering effort was twofold: first, to successfully write the PyTorch codebase for the theoretical model, and second, to elevate the academic concept into a functional, real-time, SSD-friendly live detection pipeline complete with a UI dashboard suitable for a Security Operations Center (SOC).
@@ -17,10 +17,10 @@ While the academic paper focuses strictly on offline classification using static
 
 1.  **Live Traffic Capture Agent (`nfstream`)**:
     Instead of relying on offline packet captures, we built `capture_agent.py`. This daemon hooks directly into the host OS Kernel (via eBPF, NDIS, or BPF) using `nfstream`. It evaluates raw bytes flying across the NIC and mathematically approximates them into the 78 CIC-IDS features on the fly.
-2.  **RAM-Buffered Asynchronous Queuing**:
-    Academic models rarely consider SSD I/O. To process live traffic without tearing up physical hard drives or blocking the inference thread, we implemented a Shared-Memory (`/dev/shm` on Linux) rolling queue mechanism. The agent acts as the producer, and the Streamlit dashboard acts as the consumer.
+2.  **RAM-Buffered Asynchronous Queuing (Cross-Platform)**:
+    Academic models rarely consider SSD I/O. To process live traffic without physical hard drive wear, we implemented a rolling queue mechanism. On Linux, this utilizes Shared-Memory (`/dev/shm`) for near-instantaneous I/O. For Windows and macOS, the system automatically falls back to a high-speed local CSV buffer with atomic file locking to ensure reliability across all operating systems.
 3.  **Batch Processing**:
-    The live inference dashboard processes arriving packets in batches of 100 flows at a time natively via vectorized PyTorch tensors, eliminating Python loop overhead. This allows the system to process hundreds of Gbps of flow data in real-time.
+    The live inference dashboard processes arriving packets in batches of 100 flows natively via vectorized PyTorch tensors, eliminating Python loop overhead. This ensures the system remains responsive even under high network throughput.
 4.  **Auto-Tuning Threshold Mechanism**:
     Unlike static 0.5 probability thresholds used in academia, this implementation utilizes an automatic F1-Score tuning pass upon initialization. The model tests ranges of thresholds against a validation subset dataset to proactively map the exact threshold value that prevents False Positives specifically for the deployed environment.
 
@@ -49,3 +49,19 @@ The models were evaluated against a holdout testing split. Below are the actual 
 *   **Computational Overhead**: Running deep packet inspection alongside statistical derivations (`nfstream`) utilizes significant CPU overhead. Under extreme loads (e.g., volumetric DDoS over an enterprise 10Gbps link), the Python-based capture agent may drop intermittent packets without a raw C++ backend.
 *   **Approximated Feature Engineering**: Because CICFlowMeter is traditionally offline, `nfstream` features were mathematically remapped/padded. This introduces slight deviations in baseline stats that could marginally lower the accuracy of the neural network originally trained strictly on CICFlowMeter metrics.
 *   **Lack of Payload Inspection**: The system relies on 78 numerical flow-based metrics (packet lengths, flow duration, ratios). Because it strips payload strings (like HTTP GET requests), it cannot perform deep regex matching to stop zero-day Web Application exploits that hide within perfectly normal-looking packet rates.
+
+## 6. Cross-Platform Compatibility
+
+The system architecture was engineered with portability in mind:
+*   **Linux**: Full support with optimized `eBPF` hooks and `/dev/shm` shared memory.
+*   **Windows**: Supported via `nfstream` utilizing [Npcap](https://npcap.com/). The capture agent handles Windows-specific permissions and lacks `fcntl` blocking, using a managed file-stream approach instead.
+*   **macOS**: Supported via standard BPF hooks. The user must grant Terminal/Python "Full Disk Access" and run with `sudo` for live interface binding.
+
+## 7. Hardware & RAM Requirements
+
+Analysis of the deployment pipeline confirms a lightweight footprint suitable for edge devices or developer workstations:
+*   **RAM**: 
+    *   **Minimum**: 4GB (System + IDS Agent + Dashboard).
+    *   **Recommended**: 8GB+ (Ensures smooth visualization of high-throughput traffic).
+*   **Storage**: Minimal (~200MB for Python environment + Model weights). The rolling buffer limits the traffic queue to 20MB, protecting SSD lifespan.
+*   **CPU**: Multi-core recommended. The capture agent and inference engine run on separate threads/processes to prevent UI lag.

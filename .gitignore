@@ -4,6 +4,9 @@ __pycache__/
 .env
 .venv
 
+app/data/captures/
+app/data/sample_traffic.csv
+
 data/raw/
 data/processed/
 *.npy
@@ -30,3 +33,9 @@ notebooks/*.ipynb
 
 .DS_Store
 Thumbs.db
+
+# Streamlit secrets (sensitive data)
+.streamlit/secrets.toml
+
+# Streamlit data/cache
+.streamlit/static/
